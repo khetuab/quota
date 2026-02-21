@@ -63,7 +63,7 @@ const buildQuotaResponse = (quota) => {
    ✅ USER ROUTES
 ================================= */
 
-// 📝 REGISTER
+// 📝 REGISTER (Admin only - used by Flutter app)
 app.post("/api/auth/register", async (req, res) => {
   try {
     const { username, password } = req.body;
@@ -126,8 +126,31 @@ app.post("/api/auth/login", async (req, res) => {
   }
 });
 
+// 🔍 CHECK USER EXISTS (for web login)
+app.post("/api/auth/check-user", async (req, res) => {
+  try {
+    const { username } = req.body;
+    
+    const user = await User.findOne({ username });
+    const quota = await Quota.findOne({ user: username });
+    
+    if (user && quota) {
+      res.json({ 
+        exists: true, 
+        username: user.username,
+        quota: buildQuotaResponse(quota)
+      });
+    } else {
+      res.json({ exists: false });
+    }
+  } catch (error) {
+    console.error("CHECK USER ERROR:", error.message);
+    res.status(500).json({ error: "Failed to check user" });
+  }
+});
+
 /* ===============================
-   ✅ ADMIN ROUTES (MISSING IN YOUR BACKEND)
+   ✅ ADMIN ROUTES
 ================================= */
 
 // 👥 GET ALL USERS (Admin)
@@ -162,7 +185,7 @@ app.get("/api/admin/users", async (req, res) => {
     
   } catch (error) {
     console.error("GET USERS ERROR:", error.message);
-    res.status(500).json({ error: "Failed to fetch users" });
+    res.json([]);
   }
 });
 
@@ -193,16 +216,32 @@ app.delete("/api/admin/users/:username", async (req, res) => {
    ✅ QUOTA ROUTES
 ================================= */
 
-// GET QUOTA
+// GET QUOTA - FIXED: Don't auto-create users
 app.get("/api/quota/:user", async (req, res) => {
   try {
     const { user } = req.params;
     console.log(`📡 Fetching quota for: ${user}`);
     
-    let quota = await Quota.findOne({ user });
+    // ONLY find existing quota, don't create
+    const quota = await Quota.findOne({ user });
 
     if (!quota) {
-      quota = await Quota.create({ user });
+      // Check if user exists in User collection
+      const userExists = await User.findOne({ username: user });
+      
+      if (!userExists) {
+        // Return 404 if user doesn't exist
+        return res.status(404).json({ 
+          error: "User not found",
+          message: "This username doesn't exist. Please contact admin to create your account."
+        });
+      } else {
+        // User exists but quota doesn't (shouldn't happen, but just in case)
+        return res.status(404).json({ 
+          error: "Quota not found",
+          message: "Quota not initialized. Please contact admin."
+        });
+      }
     }
 
     res.json(buildQuotaResponse(quota));
@@ -212,16 +251,32 @@ app.get("/api/quota/:user", async (req, res) => {
   }
 });
 
-// INCREMENT DOWNLOAD
+// INCREMENT DOWNLOAD - FIXED: Don't auto-create users
 app.post("/api/quota/increment/:user", async (req, res) => {
   try {
     const { user } = req.params;
     console.log(`📡 Incrementing for: ${user}`);
     
-    let quota = await Quota.findOne({ user });
+    // ONLY find existing quota, don't create
+    const quota = await Quota.findOne({ user });
 
     if (!quota) {
-      quota = await Quota.create({ user });
+      // Check if user exists
+      const userExists = await User.findOne({ username: user });
+      
+      if (!userExists) {
+        return res.status(404).json({ 
+          allowed: false,
+          error: "User not found",
+          message: "This username doesn't exist. Please contact admin to create your account."
+        });
+      } else {
+        return res.status(404).json({ 
+          allowed: false,
+          error: "Quota not found",
+          message: "Quota not initialized. Please contact admin."
+        });
+      }
     }
 
     const remaining = quota.maxDownloads - quota.usedDownloads;
@@ -248,11 +303,21 @@ app.post("/api/quota/increment/:user", async (req, res) => {
   }
 });
 
-// RESET DOWNLOADS
+// RESET DOWNLOADS - FIXED: Check if user exists first
 app.post("/api/quota/reset/:user", async (req, res) => {
   try {
     const { user } = req.params;
     console.log(`📡 Resetting quota for: ${user}`);
+    
+    // Check if user exists first
+    const userExists = await User.findOne({ username: user });
+    if (!userExists) {
+      return res.status(404).json({ 
+        success: false,
+        error: "User not found",
+        message: "This username doesn't exist."
+      });
+    }
     
     const quota = await Quota.findOneAndUpdate(
       { user },
@@ -271,7 +336,7 @@ app.post("/api/quota/reset/:user", async (req, res) => {
   }
 });
 
-// SET LIMIT
+// SET LIMIT - FIXED: Check if user exists first
 app.post("/api/quota/set-limit/:user", async (req, res) => {
   try {
     const { user } = req.params;
@@ -283,6 +348,16 @@ app.post("/api/quota/set-limit/:user", async (req, res) => {
       return res.status(400).json({
         success: false,
         error: "maxDownloads must be >= 1",
+      });
+    }
+
+    // Check if user exists first
+    const userExists = await User.findOne({ username: user });
+    if (!userExists) {
+      return res.status(404).json({ 
+        success: false,
+        error: "User not found",
+        message: "This username doesn't exist."
       });
     }
 
@@ -316,6 +391,7 @@ app.get("/", (req, res) => {
       "POST /api/quota/set-limit/:user",
       "POST /api/auth/register",
       "POST /api/auth/login",
+      "POST /api/auth/check-user",
       "GET /api/admin/users",
       "DELETE /api/admin/users/:username"
     ]
@@ -335,6 +411,7 @@ app.listen(PORT, () => {
   console.log(`   📝 POST /api/quota/set-limit/:user`);
   console.log(`   📝 POST /api/auth/register`);
   console.log(`   🔑 POST /api/auth/login`);
+  console.log(`   🔍 POST /api/auth/check-user`);
   console.log(`   👥 GET  /api/admin/users`);
   console.log(`   🗑️ DELETE /api/admin/users/:username`);
 });
